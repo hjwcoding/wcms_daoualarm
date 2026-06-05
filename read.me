@@ -1,0 +1,191 @@
+# WinCMS 게시판 모니터링 자동화
+
+WinCMS 게시판의 **전달 / 등록** 항목을 주기적으로 감지하여 다우메신저로 자동 알림을 전송하는 모니터링 시스템입니다.
+
+---
+
+## 목차
+
+- [개요](#개요)
+- [시스템 흐름](#시스템-흐름)
+- [기술 스택](#기술-스택)
+- [설치](#설치)
+- [환경 설정](#환경-설정)
+- [실행](#실행)
+- [주요 기능](#주요-기능)
+- [알림 메시지 형식](#알림-메시지-형식)
+- [디렉토리 구조](#디렉토리-구조)
+
+---
+
+## 개요
+
+우리은행 WinCMS 게시판에 **전달** 또는 **등록** 상태의 항목이 발생하면 실시간으로 다우메신저 채널에 알림을 전송합니다.
+
+- **수집 주기**: 매 5분 (node-cron)
+- **브라우저 자동화**: Playwright (Chromium headless)
+- **알림 채널**: 다우메신저 API
+
+---
+
+## 시스템 흐름
+
+```
+node-cron 트리거 (*/5 * * * *)
+        ↓
+Playwright 로그인 (WinCMS)
+        ↓
+게시판 iframe 접근 및 HTML 파싱
+        ↓
+전달 / 등록 항목 감지
+        ↓
+    ┌───┴───┐
+  신규 감지  신규 없음
+    ↓          ↓
+다우메신저   다음 주기 대기
+API 알림
+```
+
+---
+
+## 기술 스택
+
+| 항목 | 내용 |
+|---|---|
+| Runtime | Node.js |
+| 브라우저 자동화 | Playwright (Chromium) |
+| 스케줄러 | node-cron |
+| HTTP 요청 | fetch (Node.js 내장) |
+| 알림 | 다우메신저 API |
+| 고유 ID 생성 | uuid |
+
+---
+
+## 설치
+
+```bash
+# 패키지 설치
+npm install playwright node-cron uuid
+
+# Playwright Chromium 설치
+npx playwright install chromium
+```
+
+---
+
+## 환경 설정
+
+`monitor.js` 상단의 CONFIG 값을 실제 환경에 맞게 수정합니다.
+
+```javascript
+// WinCMS 설정
+const CONFIG = {
+  loginUrl: 'https://svc.wooribank.com/wsm/common/login_counsel.jsp',
+  boardUrl: 'https://svc.wooribank.com/wsm/calladm/sysadmin/wccom500_01i.jsp',
+  id: 'YOUR_ID',        // WinCMS 아이디
+  pw: 'YOUR_PASSWORD',  // WinCMS 비밀번호
+  birth: 'YYMMDD',      // 생년월일 6자리
+};
+
+// 다우메신저 설정
+const DAOU_CONFIG = {
+  loginUrl: 'https://kwic.daouoffice.com/api/portal/public/auth/login',
+  messageUrl: 'https://kwic.daouoffice.com/api/chat/message',
+  chatRoomId: 'YOUR_CHAT_ROOM_ID',  // 알림 받을 채팅방 ID
+  id: 'YOUR_DAOU_ID',               // 다우메신저 아이디
+  pw: 'YOUR_DAOU_PASSWORD',         // 다우메신저 비밀번호
+};
+```
+
+---
+
+## 실행
+
+```bash
+node monitor.js
+```
+
+실행 시 즉시 1회 체크 후, 이후 매 5분마다 자동 실행됩니다.
+
+```
+모니터링 시작...
+✅ WinCMS 로그인 완료 - URL: https://svc.wooribank.com/...
+✅ 프레임 찾음!
+[2026-04-01T00:00:00.000Z] 감지된 항목: 2개
+----------------------------------
+유형    : 전달
+postId  : 202604010000001
+이름    : 홍길동
+회사    : (주)예시회사
+전화    : 010-1234-5678
+내용    : 거래내역조회 오류
+담당    : WIN-CMS/담당자
+일시    : 2604010930
+중복    : 신규
+----------------------------------
+✅ 다우메신저 API 알림 완료 [202604010000001]
+```
+
+---
+
+## 주요 기능
+
+### 로그인 자동화
+- 아이디 / 비밀번호 / 생년월일 3단계 인증 자동 처리
+- `signCert()` JavaScript 함수 기반 로그인 버튼 클릭
+
+### iframe 기반 게시판 스크래핑
+- WinCMS 특성상 게시판이 iframe 구조로 구성
+- `page.frames()` 로 URL 기반 프레임 탐색 후 데이터 수집
+
+### 전달 / 등록 감지 로직
+- 완료여부 컬럼(`td[7]`) 텍스트 기준 필터링
+- `전달`: `<b>` 태그 단독 구조
+- `등록`: `<a class="sname">` 링크 구조
+- 두 케이스 모두 처리, 위 행에서 접수 정보 역추적
+
+### 중복 알림 방지
+- `postId` 기준 `Set` 자료구조로 중복 감지 차단
+- 프로세스 재시작 시 초기화 (필요 시 파일/DB 저장으로 확장 가능)
+
+### 다우메신저 API 연동
+- 로그인 후 `AccessToken` / `RefreshToken` 쿠키 추출
+- 토큰 만료 시 자동 재로그인 후 재전송
+- 메시지 전송 시 `cmid`에 UUID 사용 (중복 방지)
+
+---
+
+## 알림 메시지 형식
+
+다우메신저 채팅방에 다음 형식으로 전송됩니다.
+
+```
+📋 WinCMS 알림
+유형    : 전달
+이름    : 홍길동
+회사    : (주)예시회사
+전화    : 010-1234-5678
+내용    : 거래내역조회 오류
+담당    : WIN-CMS/담당자
+일시    : 2604010930
+```
+
+---
+
+## 디렉토리 구조
+
+```
+project/
+├── monitor.js       # 메인 실행 파일
+├── package.json
+└── README.md
+```
+
+---
+
+## 참고
+
+- WinCMS 세션 만료 시 자동으로 재로그인 시도
+- 다우메신저 토큰 만료(`401`) 시 자동 재로그인 후 재전송
+- `headless: true` 설정으로 백그라운드 실행 (화면 없이 동작)
+- 실행 주기 변경: `cron.schedule('*/5 * * * *', ...)` 의 크론 표현식 수정

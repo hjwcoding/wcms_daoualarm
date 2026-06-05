@@ -1,0 +1,6 @@
+[Kk]eystores/
+keystores
+logs
+tags
+node_modules
+.env
